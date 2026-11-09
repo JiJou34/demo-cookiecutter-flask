@@ -6,63 +6,114 @@ A flasky app.
 
 This app can be run completely using `Docker` and `docker compose`. **Using Docker is recommended, as it guarantees the application is run using compatible versions of Python and Node**.
 
-There are three main services:
+There are three services: `flask-dev` (development), `flask-prod` (production mode), and `manage` (Flask CLI commands).
 
-To run the development version of the app
+### First installation (Windows / PowerShell)
 
-```bash
-docker compose up flask-dev
+Run all commands from the project root, with Docker Desktop running. Continue to the next command only if the previous command succeeds.
+
+Before starting any container, prepare the local configuration and SQLite file:
+
+```powershell
+if (-not (Test-Path -LiteralPath .env)) { Copy-Item .env.example .env }
+if (-not (Test-Path -LiteralPath dev.db)) { New-Item -ItemType File -Path .\dev.db }
 ```
 
-To run the production version of the app
+Keep an existing `.env`: it may contain your own configuration. The default `DATABASE_URL=sqlite:////tmp/dev.db` refers to the path inside Docker.
 
-```bash
-docker compose up flask-prod
+If `dev.db` is already a **directory**, follow the troubleshooting section below before continuing.
+
+Build the management image:
+
+```powershell
+docker compose build manage
 ```
 
-The list of `environment:` variables in the `docker compose.yml` file takes precedence over any variables specified in `.env`.
+If the project has no `migrations` directory yet, create the migration repository and the initial migration once:
 
-To run any commands using the `Flask CLI`
-
-```bash
-docker compose run --rm manage <<COMMAND>>
-```
-
-Therefore, to initialize a database you would run
-
-```bash
+```powershell
 docker compose run --rm manage db init
-docker compose run --rm manage db migrate
+docker compose run --rm manage db migrate -m "Initial database"
+```
+
+If `migrations` is already included in your checkout, use the existing migrations instead. Apply migrations to create or update the database tables:
+
+```powershell
 docker compose run --rm manage db upgrade
 ```
 
-A docker volume `node-modules` is created to store NPM packages and is reused across the dev and prod versions of the application. For the purposes of DB testing with `sqlite`, the file `dev.db` is mounted to all containers. This volume mount should be removed from `docker compose.yml` if a production DB server is used.
+Start the development application:
 
-Go to `http://localhost:8080`. You will see a pretty welcome screen.
+```powershell
+docker compose up --build -d flask-dev
+```
+
+Open `http://localhost:8080`.
+
+### Subsequent starts
+
+```powershell
+docker compose up -d flask-dev
+```
+
+Use `--build` after changing the Dockerfile or dependencies. After pulling new migrations, run `docker compose run --rm manage db upgrade`.
+
+To inspect logs or stop the project:
+
+```powershell
+docker compose logs --tail 100 flask-dev
+docker compose down
+```
+
+### Troubleshooting
+
+**`dev.db` is a directory:** Docker creates a directory when a bind-mount source is missing. SQLite needs a file. Stop and remove the project containers, remove the empty directory, and create the file:
+
+```powershell
+docker compose down
+Remove-Item -LiteralPath .\dev.db
+New-Item -ItemType File -Path .\dev.db
+```
+
+These repair commands apply only when `dev.db` is an empty directory. Do not run them against an existing database file. If the directory contains files, inspect and preserve them before removing it. Then continue with the database initialization steps above, using existing migrations if present.
+
+**`Could not locate a Flask application`:** check that `.env` exists at the project root and contains `FLASK_APP=autoapp.py`. The local directory mounted at `/app` hides the `.env` created inside the image during its build. After correcting `.env`, run `docker compose restart flask-dev`.
+
+**`pull access denied for my_flask_app-development`:** this image is built locally by this project. Run `docker compose up --build -d flask-dev` and check the subsequent build output if it fails.
+
+The `environment:` variables in `docker-compose.yml` take precedence over variables loaded from `.env` by the application.
+
+To run Flask CLI commands, append the command after `manage`, for example:
+
+```powershell
+docker compose run --rm manage routes
+```
+
+A docker volume `node-modules` is created to store NPM packages and is reused across the dev and prod versions of the application. For the purposes of DB testing with `sqlite`, the file `dev.db` is mounted to all containers. This volume mount should be removed from `docker compose.yml` if a production DB server is used.
 
 ### Running locally
 
 Run the following commands to bootstrap your environment if you are unable to run the application using Docker
 
-```bash
-cd my_flask_app
+Run these commands from the project root with Python 3.13 and Node 22 installed. Prepare `.env` as described above, then change its `DATABASE_URL` to `sqlite:///dev.db` for local execution (the default `/tmp/dev.db` path is intended for Docker).
+
+```powershell
 pip install -r requirements/dev.txt
 npm install
 npm run-script build
-npm start  # run the webpack dev server and flask server using concurrently
 ```
+
+Initialize the database as described below before running `npm start`, which starts Webpack and Flask together.
 
 Go to `http://localhost:5000`. You will see a pretty welcome screen.
 
 #### Database Initialization (locally)
 
-Once you have installed your DBMS, run the following to create your app's
-database tables and perform the initial migration
+SQLite requires no separate database server. If there is no `migrations` directory, run `flask db init` and `flask db migrate` once. Then apply existing migrations:
 
 ```bash
-flask db init
-flask db migrate
 flask db upgrade
+npm start
 ```
 
 ## Deployment
@@ -74,13 +125,16 @@ FLASK_ENV=production
 FLASK_DEBUG=0
 ```
 
-Therefore, starting the app in "production" mode is as simple as
+Complete the configuration and database setup above first. To run the production service locally, stop the development service to free port 8080:
 
 ```bash
-docker compose up flask-prod
+docker compose stop flask-dev
+docker compose up --build -d flask-prod
 ```
 
-If running without Docker
+Before deploying publicly, set a strong `SECRET_KEY` and configure the production database. The supplied `.env.example` contains development values.
+
+If running without Docker (Bash syntax)
 
 ```bash
 export FLASK_ENV=production
